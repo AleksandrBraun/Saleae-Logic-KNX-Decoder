@@ -1,0 +1,13 @@
+{
+  "name": "KNX Decoder",
+  "apiVersion": "1.0.0",
+  "author": "Alex Braun",
+  "version": "0.0.1",
+  "description": "Decoding KNX telegram",
+  "extensions": {
+    "KNX Decoder": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "HighLevelAnalyzer.Hla"
+    }
+  }
+}

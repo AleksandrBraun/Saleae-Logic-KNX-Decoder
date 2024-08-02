@@ -1,0 +1,311 @@
+# High Level Analyzer
+# For more information and documentation, please go to https://support.saleae.com/extensions/high-level-analyzer-extensions
+
+from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, StringSetting, NumberSetting, ChoicesSetting
+
+
+# High level analyzers must subclass the HighLevelAnalyzer class.
+class Hla(HighLevelAnalyzer):
+#    List of settings that a user can set for this High Level Analyzer.
+#    my_string_setting = StringSetting()
+#    my_number_setting = NumberSetting(min_value=0, max_value=100)
+    address_length = ChoicesSetting(label='Address level', choices=('Three level', 'Two level'))
+
+    RESET_CMD = 1
+    STATE_CMD = 2
+    BUSY_CMD = 3
+    QUITBUSY_CMD = 4
+    BUSMON_CMD = 5
+
+    CONTROL_FIELD_STANDARD_FRAME_FORMAT = 188
+
+    # An optional list of types this analyzer produces, providing a way to customize the way frames are displayed in Logic 2.
+    result_types = {
+        'mytype': {
+            'format': 'Output type: {{type}}, Input type: {{data.input_type}}'
+        },
+        'cmd_str': {
+            'format': '{{data.cmd}}'
+        },
+        'source_addr_str': {
+            'format': 'Source addr: {{data.area}}.{{data.line}}.{{data.dev}}'
+        },
+        'dist_addr_str': {
+            'format': 'Destination addr: {{data.area}}/{{data.line}}/{{data.dev}}'
+        },
+        'dist_ind_addr_str': {
+            'format': 'Destination addr: {{data.area}}.{{data.line}}.{{data.dev}}'
+        },
+        'dist_2l_addr_str': {
+            'format': 'Destination addr: {{data.area}}/{{data.dev}}'
+        }
+    }
+
+    def __init__(self):
+        '''
+        Initialize HLA.
+        Settings can be accessed using the same name used above.
+        '''
+        self.datalist = []
+        self.previousFrameValue = ''
+        self.byte_count = -1
+        self.data_len = 0
+        self.telegram_len = 14 + 2   #Headet + CRC
+
+        #print("Settings:", self.address_length)
+
+
+    def decode(self, frame: AnalyzerFrame):
+        '''
+        Process a frame from the input analyzer, and optionally return a single `AnalyzerFrame` or a list of `AnalyzerFrame`s.
+        The type and data values in `frame` will depend on the input analyzer.
+        '''
+        payload_str = ''
+        self.byte_count+=1
+
+        currentFrameValue = int(frame.data['data'].hex(), 16)
+
+        item_arr = [currentFrameValue, frame.start_time, frame.end_time]
+
+        self.datalist.append(item_arr)
+
+
+        if self.previousFrameValue == "":
+            if currentFrameValue == self.RESET_CMD:
+                payload_str = 'RESET'
+            if currentFrameValue == self.STATE_CMD:
+                payload_str = 'STATE'
+            if currentFrameValue == self.BUSY_CMD:
+                payload_str = 'BUSY'
+            if currentFrameValue == self.QUITBUSY_CMD:
+                payload_str = 'QUIT BUSY'
+            if currentFrameValue == self.BUSMON_CMD:
+                payload_str = 'BUS MON'
+
+
+        if payload_str != "":
+            self.previousFrameValue = ""
+            self.byte_count = -1
+            self.datalist.clear()
+            return AnalyzerFrame('cmd_str', frame.start_time, frame.end_time,
+                {'cmd': payload_str})
+
+
+        self.previousFrameValue = currentFrameValue
+
+
+        if self.byte_count == 11:
+            self.data_len = currentFrameValue & 15
+            self.telegram_len += self.data_len * 2               #data * 2
+
+
+        if self.byte_count == self.telegram_len - 1:
+            return self.parse_packet(data = self.datalist, length = self.telegram_len)
+
+
+    def parse_packet(self, data, length):
+
+        #print('Tele len:\t' + str(length))
+        analize_frame = []                      # Output analizer array
+        new_data_list = []                      # New data byte list
+        inalize_count = 0
+        analize_count = 0
+
+        check_crc_checksum = [data[length - 2], data[length - 1]]
+
+        for i in range(length - 2):
+            if i % 2 == 0:
+                #print(data[i + 1][0])
+                temp_array = [data[i + 1][0], data[i + 1][1], data[i + 1][2]]
+                new_data_list.append(temp_array)
+                inalize_count+=1
+
+        #print('Data list len:\t' + str(len(new_data_list)))
+
+        # Response address type (group / Individual)
+        routing_field = new_data_list[5][0]
+        target_addr = routing_field >> 7
+
+
+        #######################
+        # Parse Control Field #
+        #######################
+        contr_field = new_data_list[0][0]
+        len_data = contr_field >> 6
+        if len_data == 0:
+            payload_str = 'Extended length/'
+        elif len_data == 2:
+            payload_str = 'Standart length/'
+        else:
+            payload_str = 'Pool data/'
+
+        repeat = (contr_field >> 5) & 1
+        if repeat == 0:
+            payload_str += 'Repeat/'
+        else:
+            payload_str += 'No Repeat/'
+
+        priority = (contr_field >> 2) & 3
+        if priority == 0:
+            payload_str += 'System priority'
+        elif priority == 1:
+            payload_str += 'High priority'
+        elif priority == 2:
+            payload_str += 'Alarm priority'
+        else:
+            payload_str += 'Normal priority'
+
+        if payload_str != "":
+            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[0][1], new_data_list[0][2], {'cmd': payload_str}))
+
+        ########################
+        # Parse Source Address #
+        ########################
+        area = new_data_list[1][0] >> 4
+        line = new_data_list[1][0] & 15
+        dev = new_data_list[2][0]
+
+        analize_count+=1
+        analize_frame.insert(analize_count, AnalyzerFrame('source_addr_str', new_data_list[1][1], new_data_list[2][2],
+            {'area': area, 'line': line, 'dev': dev}))
+
+        #############################
+        # Parse Destination Address #
+        #############################
+        if self.address_length == 'Two level' and target_addr == 1:
+            addr = new_data_list[3][0] << 8
+            addr += new_data_list[4][0]
+            area = addr >> 11
+            dev = addr & 2047
+            analize_count+=1
+            analize_frame.insert(analize_count, AnalyzerFrame('dist_2l_addr_str', new_data_list[3][1], new_data_list[4][2],
+                {'area': area, 'dev': dev}))
+        else:
+            if target_addr == 0:
+                area = new_data_list[3][0] >> 4
+            else:
+                area = new_data_list[3][0] >> 3
+            line = new_data_list[3][0] & 7
+            dev = new_data_list[4][0]
+            analize_count+=1
+            if target_addr == 1:
+                analize_frame.insert(analize_count, AnalyzerFrame('dist_addr_str', new_data_list[3][1], new_data_list[4][2],
+                    {'area': area, 'line': line, 'dev': dev}))
+            else:
+                analize_frame.insert(analize_count, AnalyzerFrame('dist_ind_addr_str', new_data_list[3][1], new_data_list[4][2],
+                    {'area': area, 'line': line, 'dev': dev}))
+
+        #######################
+        # Parse Routing field #
+        #######################
+        if target_addr == 0:
+            payload_str = 'Individual/'
+        else:
+            payload_str = 'Group/'
+
+        data_len = routing_field & 15
+        payload_str += 'len: ' + str(self.data_len)
+        analize_count+=1
+        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[5][1], new_data_list[5][2],
+            {'cmd': payload_str}))
+
+        ###############################
+        # Parse Commmand field & Data #
+        ###############################
+        comm_field = new_data_list[6][0] & 3
+        command = comm_field << 2
+        comm_field = new_data_list[7][0] >> 6
+        command += comm_field
+        if command == 0:
+            payload_str = 'CMD: VAL READ /'
+        elif command == 1:
+            payload_str = 'CMD: VAL RES /'
+        elif command == 2:
+            payload_str = 'CMD: VAL WRITE /'
+        elif command == 3:
+            payload_str = 'CMD: IND ADDR WRITE /'
+        elif command == 4:
+            payload_str = 'CMD: IND ADDR REQ /'
+        elif command == 5:
+            payload_str = 'CMD: IND ADDR RES /'
+        elif command == 6:
+            payload_str = 'CMD: ADC READ /'
+        elif command == 7:
+            payload_str = 'CMD: ADC RES /'
+        elif command == 8:
+            payload_str = 'CMD: MEM READ /'
+        elif command == 9:
+            payload_str = 'CMD: MEM RES /'
+        elif command == 10:
+            payload_str = 'CMD: MEM WRITE /'
+        elif command == 12:
+            payload_str = 'CMD: MASK READ /'
+        elif command == 13:
+            payload_str = 'CMD: MASK RES /'
+        elif command == 15:
+            payload_str = 'CMD: ESCAPE /'
+        else:
+            payload_str = 'UNKNOWN /'
+
+        if data_len == 1:
+            payload_str += ' Data: {0} (0x{0:02X} / bxx{0:06b})'.format(new_data_list[7][0] & 63)
+        else:
+            payload_str += ' Data: ' + str(new_data_list[7][0] & 63)
+        analize_count+=1
+        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[6][1], new_data_list[7][2], {'cmd': payload_str}))
+
+        if data_len > 1:
+            payload_count = 8
+            analize_count+=1
+            temp_data = []
+            for i in range(data_len - 1):
+                if data_len == 2:
+                    analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': new_data_list[payload_count][0]}))
+                if data_len == 3:
+                    temp_data.append(new_data_list[payload_count][0])
+                    if len(temp_data) == 2:
+                        result = (temp_data[0] << 8) + temp_data[1]
+                        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': result}))
+                        multi_byte = 0
+                if data_len == 4 or data_len == 5:
+                        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': new_data_list[payload_count][0]}))
+                if data_len == 15:
+                    payload_str = chr(new_data_list[payload_count][0])
+                    if new_data_list[payload_count][0] != 0:
+                        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': payload_str}))
+
+                payload_count += 1
+                analize_count += 1
+
+        ##########################
+        # Calculate CRC Checksum #
+        ##########################
+        bcc = 255                           # 0xFF  CRC
+        tele_data_end = 64                  # b0100 0000  Data end code
+
+        for i in range(len(new_data_list)):
+            bcc ^= new_data_list[i][0]
+
+        tele_data_end |= len(new_data_list)
+
+        if tele_data_end == check_crc_checksum[0][0] and bcc == check_crc_checksum[1][0]:
+            payload_str = 'CRC correct'
+        else:
+            payload_str = 'CRC not correct'
+
+        analize_count+=1
+        analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', check_crc_checksum[0][1], check_crc_checksum[1][2], {'cmd': payload_str}))
+
+        self.previousFrameValue = ""
+        self.byte_count = -1
+        self.datalist.clear()
+        self.data_len = 0
+        self.telegram_len = 14 + 2   #Headet + CRC
+
+
+        return analize_frame
+
+
+
+
+
