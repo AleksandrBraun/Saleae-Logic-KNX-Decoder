@@ -9,10 +9,14 @@
 
 Typically communication between the control unit and the KNX controller is at 19200 baud, 8 data bits, EVEN parity bit and one stop bit.
 
-In the settings, select the address depth.
-2 / 3 levels.
+In the settings, select the address depth:
+2 / 3 levels addresses.
+And decoder mode:
+TX - data from device to bus
+RX - data from bus to device
 
-![изображение](https://github.com/user-attachments/assets/e5cc6153-c925-4519-9184-79436db98847)
+![изображение](https://github.com/user-attachments/assets/b0907abd-486a-4551-8428-77b127140fe7)
+
 
 
 
