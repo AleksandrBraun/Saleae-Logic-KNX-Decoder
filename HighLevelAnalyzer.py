@@ -21,6 +21,10 @@ class Hla(HighLevelAnalyzer):
     ACK_INFO = 16
     ACK_INFO_ADDRESSED = 17
 
+    # Communication type
+    UNNUMB_DATA_PACKET = 0b00
+    UNNUMB_CONTROL_DATA = 0b10
+
     ACK_CONTI = 139
 
     # An optional list of types this analyzer produces, providing a way to customize the way frames are displayed in Logic 2.
@@ -49,10 +53,11 @@ class Hla(HighLevelAnalyzer):
         '''
         self.datalist = []
         self.previousFrameValue = ''
-        self.byte_count = -1
+        self.byte_count = 0
         self.data_len = 0
-        self.telegram_len = 14 + 2              # Headet + CRC
+        self.telegram_len = 14 + 2          # Headet + CRC
         self.rx_telegram_len = 7 + 1        # Header + CRC
+        self.comm_type = 0
 
         #print("Settings:", self.address_length)
 
@@ -63,7 +68,6 @@ class Hla(HighLevelAnalyzer):
         The type and data values in `frame` will depend on the input analyzer.
         '''
         payload_str = ''
-        self.byte_count+=1
 
         currentFrameValue = int(frame.data['data'].hex(), 16)
 
@@ -85,13 +89,13 @@ class Hla(HighLevelAnalyzer):
                 if currentFrameValue == self.BUSMON_CMD:
                     payload_str = 'BUS MON'
                 if currentFrameValue == self.ACK_INFO:
-                    payload_str = 'ACK'
+                    payload_str = 'ACK NO ADDR'
                 if currentFrameValue == self.ACK_INFO_ADDRESSED:
                     payload_str = 'ACK ADDR'
 
             if payload_str != '':
                 self.previousFrameValue = ''
-                self.byte_count = -1
+                self.byte_count = 0
                 self.datalist.clear()
                 return AnalyzerFrame('cmd_str', frame.start_time, frame.end_time, {'cmd': payload_str})
 
@@ -99,6 +103,9 @@ class Hla(HighLevelAnalyzer):
             if self.byte_count == 11:
                 self.data_len = currentFrameValue & 15
                 self.telegram_len += self.data_len * 2               #data * 2
+                #print('data_len:\t' + str(self.data_len))
+                #print('telegram_len:\t' + str(self.telegram_len))
+                #print('byte_count:\t' + str(self.byte_count))
 
             if self.byte_count == self.telegram_len - 1:
                 return self.parse_packet(data = self.datalist, length = self.telegram_len)
@@ -117,18 +124,22 @@ class Hla(HighLevelAnalyzer):
 
             if payload_str != '':
                 self.previousFrameValue = ''
-                self.byte_count = -1
+                self.byte_count = 0
                 self.datalist.clear()
                 return AnalyzerFrame('cmd_str', frame.start_time, frame.end_time, {'cmd': payload_str})
     
             if self.byte_count == 5:
                 self.data_len = currentFrameValue & 15
                 self.rx_telegram_len += self.data_len
-
+            
+            #print('Byte count:\t' + str(self.byte_count))
+            #print('Tele len:\t' + str(self.rx_telegram_len))
+            
             if self.byte_count == self.rx_telegram_len - 1:
                 return self.parse_packet(data = self.datalist, length = self.rx_telegram_len)
 
         self.previousFrameValue = currentFrameValue
+        self.byte_count+=1
 
     def parse_packet(self, data, length):
 
@@ -218,13 +229,15 @@ class Hla(HighLevelAnalyzer):
             dev = new_data_list[4][0]
             analize_count+=1
             sep = '/'
-            if target_addr == 1:
-                sep = '/'
-            else:
+            if target_addr == 0:
                 sep = '.'
 
+            brodcast = ''
+            if area == 0 and line == 0 and dev == 0:
+                brodcast = ' Brodcast'
+
             analize_frame.insert(analize_count, AnalyzerFrame('dist_addr_str', new_data_list[3][1], new_data_list[4][2],
-                {'area': area, 'line': line, 'dev': dev, 'sep': sep}))
+                {'area': area, 'line': line, 'dev': str(dev) + brodcast, 'sep': sep}))
 
         #######################
         # Parse Routing field #
@@ -243,40 +256,57 @@ class Hla(HighLevelAnalyzer):
         ###############################
         # Parse Commmand field & Data #
         ###############################
-        comm_field = new_data_list[6][0] & 3
-        command = comm_field << 2
-        comm_field = new_data_list[7][0] >> 6
-        command += comm_field
-        if command == 0:
-            payload_str = 'CMD: VAL READ'
-        elif command == 1:
-            payload_str = 'CMD: VAL RES'
-        elif command == 2:
-            payload_str = 'CMD: VAL WRITE'
-        elif command == 3:
-            payload_str = 'CMD: IND ADDR WRITE'
-        elif command == 4:
-            payload_str = 'CMD: IND ADDR REQ'
-        elif command == 5:
-            payload_str = 'CMD: IND ADDR RES'
-        elif command == 6:
-            payload_str = 'CMD: ADC READ'
-        elif command == 7:
-            payload_str = 'CMD: ADC RES'
-        elif command == 8:
-            payload_str = 'CMD: MEM READ'
-        elif command == 9:
-            payload_str = 'CMD: MEM RES'
-        elif command == 10:
-            payload_str = 'CMD: MEM WRITE'
-        elif command == 12:
-            payload_str = 'CMD: MASK READ'
-        elif command == 13:
-            payload_str = 'CMD: MASK RES'
-        elif command == 15:
-            payload_str = 'CMD: ESCAPE'
+        comm_type = (new_data_list[6][0] & 0xC0) >> 6
+        if comm_type == self.UNNUMB_CONTROL_DATA and target_addr == 0:
+            #print("Com type\t" + str(self.comm_type))
+            comm_status = new_data_list[6][0] & 0x03
+            #print("Com status\t" + str(comm_status))
+
+            if comm_status == 0:
+                payload_str = 'STATUS: OPEN'
+            if comm_status == 1:
+                payload_str = 'STATUS: BROKEN'
+
         else:
-            payload_str = 'UNKNOWN'
+
+            comm_field = new_data_list[6][0] & 3
+            command = comm_field << 2
+            comm_field = new_data_list[7][0] >> 6
+            command += comm_field
+            if command == 0:
+                payload_str = 'CMD: VAL READ'
+            elif command == 1:
+                payload_str = 'VAL RESPONSE'
+            elif command == 2:
+                payload_str = 'VAL WRITE'
+            elif command == 3:
+                payload_str = 'IND ADDR WRITE'
+            elif command == 4:
+                payload_str = 'IND ADDR REQUEST'
+            elif command == 5:
+                payload_str = 'IND ADDR RESPONSE'
+            elif command == 6:
+                payload_str = 'ADC READ'
+            elif command == 7:
+                payload_str = 'ADC RESPONSE'
+            elif command == 8:
+                payload_str = 'MEM READ'
+            elif command == 9:
+                payload_str = 'MEM RESPONSE'
+            elif command == 10:
+                payload_str = 'MEM WRITE'
+            elif command == 11:
+                payload_str = 'USER MESSSAGE'
+            elif command == 12:
+                payload_str = 'MASK READ'
+            elif command == 13:
+                payload_str = 'MASK RESPONSE'
+            elif command == 14:
+                payload_str = 'RESTART'
+            elif command == 15:
+                payload_str = 'ESCAPE'
+            else:
+                payload_str = 'UNKNOWN'
 
         analize_count+=1
 
@@ -298,13 +328,21 @@ class Hla(HighLevelAnalyzer):
                     if data_len == 2:
                         analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': new_data_list[payload_count][0]}))
                     if data_len == 3:
-                        temp_data.append(new_data_list[payload_count][0])
+                        temp_data.append(new_data_list[payload_count])
                         if len(temp_data) == 2:
-                            result = (temp_data[0] << 8) + temp_data[1]
-                            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': result}))
+                            result = (temp_data[0][0] << 8) + temp_data[1][0]
+                            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', temp_data[0][1], temp_data[1][2], {'cmd': result}))
                             multi_byte = 0
-                    if data_len == 4 or data_len == 5:
-                            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', new_data_list[payload_count][1], new_data_list[payload_count][2], {'cmd': new_data_list[payload_count][0]}))
+                    if data_len == 4:
+                        temp_data.append(new_data_list[payload_count])
+                        if len(temp_data) == 3:
+                            result = (temp_data[0][0] << 16) + (temp_data[1][0] << 8) + temp_data[2][0]
+                            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', temp_data[0][1], temp_data[2][2], {'cmd': result}))
+                    if data_len == 5:
+                        temp_data.append(new_data_list[payload_count])
+                        if len(temp_data) == 4:
+                            result = (temp_data[0][0] << 24) + (temp_data[1][0] << 16) + (temp_data[2][0] << 8) + temp_data[3][0]
+                            analize_frame.insert(analize_count, AnalyzerFrame('cmd_str', temp_data[0][1], temp_data[3][2], {'cmd': result}))
                     if data_len == 15:
                         payload_str = chr(new_data_list[payload_count][0])
                         if new_data_list[payload_count][0] != 0:
@@ -352,7 +390,7 @@ class Hla(HighLevelAnalyzer):
 
         #print('CRC: 0x{0:02X}'.format(bcc))
         self.previousFrameValue = ''
-        self.byte_count = -1
+        self.byte_count = 0
         self.datalist.clear()
         self.data_len = 0
 
