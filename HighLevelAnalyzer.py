@@ -23,7 +23,9 @@ class Hla(HighLevelAnalyzer):
 
     # Communication type
     UNNUMB_DATA_PACKET = 0b00
+    NUMB_DATA_PACKET = 0b01
     UNNUMB_CONTROL_DATA = 0b10
+    NUMB_CONTROL_DATA = 0b11
 
     ACK_CONTI = 139
 
@@ -266,6 +268,14 @@ class Hla(HighLevelAnalyzer):
                 payload_str = 'STATUS: OPEN'
             if comm_status == 1:
                 payload_str = 'STATUS: BROKEN'
+
+        elif comm_type == self.NUMB_CONTROL_DATA and target_addr == 0:
+            comm_status = new_data_list[6][0] & 0x03
+
+            if comm_status == 2:
+                payload_str = 'STATUS: CONFIRM'
+            if comm_status == 3:
+                payload_str = 'STATUS: FAULT'
 
         else:
 
