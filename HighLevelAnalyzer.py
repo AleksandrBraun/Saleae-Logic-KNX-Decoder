@@ -15,19 +15,21 @@ class Hla(HighLevelAnalyzer):
     RESET_EVENT = 0
     RESET_CMD = 1
     STATE_CMD = 2
-    BUSY_CMD = 3
+    RESET_ANSW_CMD = 3
     QUITBUSY_CMD = 4
     BUSMON_CMD = 5
+    STATE_ANSW_CMD = 7
+    CONFIRM_ANSW_CMD = 0x0B
+    PRODUCT_ID_CMD = 0x20
     ACK_INFO = 16
     ACK_INFO_ADDRESSED = 17
+    UNKNOWN = 87
 
     # Communication type
     UNNUMB_DATA_PACKET = 0b00
     NUMB_DATA_PACKET = 0b01
     UNNUMB_CONTROL_DATA = 0b10
     NUMB_CONTROL_DATA = 0b11
-
-    ACK_CONTI = 139
 
     # An optional list of types this analyzer produces, providing a way to customize the way frames are displayed in Logic 2.
     result_types = {
@@ -84,8 +86,8 @@ class Hla(HighLevelAnalyzer):
                     payload_str = 'RESET'
                 if currentFrameValue == self.STATE_CMD:
                     payload_str = 'STATE'
-                if currentFrameValue == self.BUSY_CMD:
-                    payload_str = 'BUSY'
+                if currentFrameValue == self.RESET_ANSW_CMD:
+                    payload_str = 'RESET ANSW'
                 if currentFrameValue == self.QUITBUSY_CMD:
                     payload_str = 'QUIT BUSY'
                 if currentFrameValue == self.BUSMON_CMD:
@@ -94,6 +96,8 @@ class Hla(HighLevelAnalyzer):
                     payload_str = 'ACK NO ADDR'
                 if currentFrameValue == self.ACK_INFO_ADDRESSED:
                     payload_str = 'ACK ADDR'
+                if currentFrameValue == self.PRODUCT_ID_CMD:
+                    payload_str = 'GET PODUCT ID'
 
             if payload_str != '':
                 self.previousFrameValue = ''
@@ -117,12 +121,31 @@ class Hla(HighLevelAnalyzer):
             #print('0x{0:02X}'.format(currentFrameValue))
 
             if self.previousFrameValue == self.RESET_EVENT:
-                if currentFrameValue == self.BUSY_CMD:
-                    payload_str = 'BUSY'
+                if currentFrameValue == self.RESET_ANSW_CMD:
+                    payload_str = 'RESET ANSW'
 
             if self.previousFrameValue == '':
-                if currentFrameValue == self.ACK_CONTI:
-                    payload_str = 'ACK CONTI'
+                if currentFrameValue == self.UNKNOWN:
+                    payload_str = 'UNKNOWN'
+
+                elif currentFrameValue & 0x07 == self.STATE_ANSW_CMD:
+                    payload_str = 'NO WARNING'
+                    if ( currentFrameValue >> 3 ) & 0x01 == 1:
+                        payload_str = 'TEMPERATURE WARN'
+                    if ( currentFrameValue >> 4 ) & 0x01 == 1:
+                        payload_str = 'PROTOCOL ERROR'
+                    if ( currentFrameValue >> 5 ) & 0x01 == 1:
+                        payload_str = 'TRANSMIT ERROR'
+                    if ( currentFrameValue >> 6 ) & 0x01 == 1:
+                        payload_str = 'RECEIVE ERROR'
+                    if ( currentFrameValue >> 7 ) & 0x01 == 1:
+                        payload_str = 'SLAVE COLLISION'
+
+                elif currentFrameValue & 0x0F == self.CONFIRM_ANSW_CMD:
+                    if ( currentFrameValue >> 7 ) & 0x01 == 1:
+                        payload_str = 'CONFIRM'
+                    else:
+                        payload_str = 'NOT CONFIRM'
 
             if payload_str != '':
                 self.previousFrameValue = ''
@@ -265,9 +288,9 @@ class Hla(HighLevelAnalyzer):
             #print("Com status\t" + str(comm_status))
 
             if comm_status == 0:
-                payload_str = 'STATUS: OPEN'
+                payload_str = 'STATUS: CONNECT'
             if comm_status == 1:
-                payload_str = 'STATUS: BROKEN'
+                payload_str = 'STATUS: DISCONNECT'
 
         elif comm_type == self.NUMB_CONTROL_DATA and target_addr == 0:
             comm_status = new_data_list[6][0] & 0x03
